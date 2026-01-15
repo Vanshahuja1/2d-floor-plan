@@ -21,6 +21,13 @@ export default function ControlPanel({
   scale,
 }: ControlPanelProps) {
   const [inputValue, setInputValue] = useState<string>("")
+  const [unit, setUnit] = useState<"m" | "cm" | "ft">("m")
+
+  const toMeters = (value: number, selectedUnit: "m" | "cm" | "ft") => {
+    if (selectedUnit === "cm") return value / 100
+    if (selectedUnit === "ft") return value * 0.3048
+    return value
+  }
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -39,7 +46,17 @@ export default function ControlPanel({
     setInputValue(value)
     const numValue = Number.parseFloat(value)
     if (!isNaN(numValue) && numValue > 0) {
-      onWallLengthChange(numValue)
+      onWallLengthChange(toMeters(numValue, unit))
+    }
+  }
+
+  const handleUnitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const nextUnit = e.target.value as "m" | "cm" | "ft"
+    setUnit(nextUnit)
+
+    const numValue = Number.parseFloat(inputValue)
+    if (!isNaN(numValue) && numValue > 0) {
+      onWallLengthChange(toMeters(numValue, nextUnit))
     }
   }
 
@@ -74,10 +91,18 @@ export default function ControlPanel({
             step="0.1"
             value={inputValue}
             onChange={handleWallLengthChange}
-            placeholder="Enter length in meters"
+            placeholder="Enter length"
             className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 outline-none transition-colors focus:border-gray-400 focus:ring-1 focus:ring-gray-300"
           />
-          <span className="text-sm text-gray-600">m</span>
+          <select
+            value={unit}
+            onChange={handleUnitChange}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-gray-400 focus:ring-1 focus:ring-gray-300"
+          >
+            <option value="m">m</option>
+            <option value="cm">cm</option>
+            <option value="ft">ft</option>
+          </select>
         </div>
       </div>
 
@@ -119,7 +144,7 @@ export default function ControlPanel({
         <ul className="mt-2 flex flex-col gap-1 text-xs text-gray-600">
           <li>1. Upload a floor plan image</li>
           <li>2. Click two points on the image to mark a known wall</li>
-          <li>3. Enter the real-world wall length in meters</li>
+          <li>3. Enter the real-world wall length and select its unit</li>
           <li>4. Scale factor will be calculated automatically</li>
         </ul>
       </div>
