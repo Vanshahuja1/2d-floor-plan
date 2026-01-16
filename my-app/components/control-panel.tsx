@@ -6,16 +6,16 @@ import { useState } from "react"
 import { Upload } from "lucide-react"
 
 interface ControlPanelProps {
-  onImageUpload: (imageData: string) => void
-  onWallLengthChange: (length: number) => void
+  onImageUploadAction: (imageData: string) => void
+  onWallLengthChangeAction: (length: number) => void
   wallLengthMeters: number | null
   pixelDistance: number | null
   scale: number | null
 }
 
 export default function ControlPanel({
-  onImageUpload,
-  onWallLengthChange,
+  onImageUploadAction,
+  onWallLengthChangeAction,
   wallLengthMeters,
   pixelDistance,
   scale,
@@ -35,7 +35,7 @@ export default function ControlPanel({
       const reader = new FileReader()
       reader.onload = (event) => {
         const imageData = event.target?.result as string
-        onImageUpload(imageData)
+        onImageUploadAction(imageData)
       }
       reader.readAsDataURL(file)
     }
@@ -46,7 +46,7 @@ export default function ControlPanel({
     setInputValue(value)
     const numValue = Number.parseFloat(value)
     if (!isNaN(numValue) && numValue > 0) {
-      onWallLengthChange(toMeters(numValue, unit))
+      onWallLengthChangeAction(toMeters(numValue, unit))
     }
   }
 
@@ -56,7 +56,7 @@ export default function ControlPanel({
 
     const numValue = Number.parseFloat(inputValue)
     if (!isNaN(numValue) && numValue > 0) {
-      onWallLengthChange(toMeters(numValue, nextUnit))
+      onWallLengthChangeAction(toMeters(numValue, nextUnit))
     }
   }
 

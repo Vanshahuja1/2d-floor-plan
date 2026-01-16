@@ -7,10 +7,10 @@ import { RotateCcw } from "lucide-react"
 
 interface CalibrationCanvasProps {
   imageData: string
-  onPointsSelected: (distance: number) => void
+  onPointsSelectedAction: (distance: number) => void
 }
 
-export default function CalibrationCanvas({ imageData, onPointsSelected }: CalibrationCanvasProps) {
+export default function CalibrationCanvas({ imageData, onPointsSelectedAction }: CalibrationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [points, setPoints] = useState<Array<{ x: number; y: number }>>([])
   const [image, setImage] = useState<HTMLImageElement | null>(null)
@@ -103,7 +103,7 @@ export default function CalibrationCanvas({ imageData, onPointsSelected }: Calib
       const dx = newPoints[1].x - newPoints[0].x
       const dy = newPoints[1].y - newPoints[0].y
       const distance = Math.sqrt(dx * dx + dy * dy)
-      onPointsSelected(distance)
+      onPointsSelectedAction(distance)
       setPoints(newPoints)
     } else if (newPoints.length > 2) {
       // Reset to single point
