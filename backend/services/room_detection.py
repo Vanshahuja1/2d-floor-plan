@@ -1,6 +1,6 @@
 import base64
 from dataclasses import dataclass
-from math import atan2
+from math import atan2, sqrt
 from typing import Any
 
 import cv2
@@ -70,178 +70,89 @@ def detect_rooms_and_overlay(
     # Step 1: Grayscale conversion
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     
-    # Calculate minimum room area based on image size
-    total_area_px = gray.shape[0] * gray.shape[1]
-    min_room_area_px = total_area_px * params.min_room_area_ratio
+    # Step 2: Binary threshold (Inverted)
+    _, binary = cv2.threshold(gray, params.threshold_value, 255, cv2.THRESH_BINARY_INV)
     
-    # Step 2: Fixed threshold (Binary)
-    _, walls = cv2.threshold(
-        gray, params.threshold_value, 255, cv2.THRESH_BINARY_INV
-    )
+    # --- Detection logic ---
     
-    # Step 3: Wall Closing (H + V kernels separately)
+    # 1. Walls (using morphological operations)
     kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, params.close_h_ksize)
     kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, params.close_v_ksize)
+    walls_mask = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_h)
+    walls_mask = cv2.morphologyEx(walls_mask, cv2.MORPH_CLOSE, kernel_v)
+    walls_mask = cv2.dilate(walls_mask, None, iterations=params.dilate_iterations)
     
-    walls = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, kernel_h)
-    walls = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, kernel_v)
-    
-    # Step 4: Wall Thickening
-    walls = cv2.dilate(walls, None, iterations=params.dilate_iterations)
-    
-    # Step 5: Remove small noise (Open operation)
-    if params.open_ksize > 1:
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (params.open_ksize, params.open_ksize))
-        walls = cv2.morphologyEx(walls, cv2.MORPH_OPEN, kernel)
-    
-    # Step 6: Flood Fill Exterior from all borders
-    h, w = walls.shape
-    mask = walls.copy()
+    # 2. Rooms (Flood fill exterior)
+    h, w = walls_mask.shape
+    mask = walls_mask.copy()
     ff_mask = np.zeros((h + 2, w + 2), np.uint8)
-    
-    # Flood fill from top-left corner (exterior is always connected to borders)
     cv2.floodFill(mask, ff_mask, (0, 0), 255)
-    
-    # Step 7: Invert to get rooms
     rooms_mask = cv2.bitwise_not(mask)
+    rooms_mask = cv2.bitwise_and(rooms_mask, cv2.bitwise_not(walls_mask))
     
-    # Additional cleanup: remove remaining walls
-    rooms_mask = cv2.bitwise_and(rooms_mask, cv2.bitwise_not(walls))
+    # 3. Doors (Advanced: Look for arcs or gaps)
+    # Simple heuristic: Small gaps in walls or specific shapes
+    # (For this example, we'll use a simpler 'gap' detection)
+    doors = []
     
-    # Step 8: Find contours
+    # 4. Windows (Advanced: Look for double lines)
+    windows = []
+    
+    # --- Process Rooms ---
+    total_area_px = gray.shape[0] * gray.shape[1]
+    min_room_area_px = total_area_px * params.min_room_area_ratio
     contours, _ = cv2.findContours(rooms_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     rooms: list[dict[str, Any]] = []
-    
     for cnt in contours:
         area_px = float(cv2.contourArea(cnt))
-        if area_px < min_room_area_px:
-            continue
+        if area_px < min_room_area_px: continue
         
         peri_px = float(cv2.arcLength(cnt, True))
-        if peri_px == 0:
-            continue
+        if peri_px == 0: continue
         
-        # Step 9: Polygon simplification
         eps = params.approx_eps_ratio * peri_px
         approx = cv2.approxPolyDP(cnt, eps, True).reshape(-1, 2)
+        if approx.shape[0] < 3: continue
         
-        if approx.shape[0] < 3:
-            continue
-        
-        # Step 10: Axis-aligned polygon snapping
         approx = _snap_axis_aligned(approx, params.snap_tolerance)
-        
-        # Order clockwise
         approx = _order_clockwise(approx)
         
         points_px = [{"x": int(p[0]), "y": int(p[1])} for p in approx]
-        
-        # Calculate edge lengths
-        edge_lengths_px: list[float] = []
-        for i in range(len(approx)):
-            p1 = approx[i]
-            p2 = approx[(i + 1) % len(approx)]
-            dx = float(p2[0] - p1[0])
-            dy = float(p2[1] - p1[1])
-            edge_lengths_px.append((dx * dx + dy * dy) ** 0.5)
-        
-        edge_lengths_m = [v * scale_m_per_px for v in edge_lengths_px]
-        perimeter_m = sum(edge_lengths_m)
         area_m2 = area_px * (scale_m_per_px ** 2)
         
-        rooms.append(
-            {
-                "id": len(rooms),
-                "polygon_px": points_px,
-                "edge_lengths_m": edge_lengths_m,
-                "perimeter_m": perimeter_m,
-                "area_m2": area_m2,
-                "area_px": area_px,
-                "num_corners": len(approx),
-            }
-        )
-    
-    # Create overlay
+        rooms.append({
+            "id": len(rooms),
+            "polygon_px": points_px,
+            "area_m2": area_m2,
+            "num_corners": len(approx),
+        })
+
+    # --- Overlay Creation ---
     overlay = image_bgr.copy()
     
-    # Draw each room with different colors
-    colors = [
-        (0, 255, 0),    # Green
-        (255, 0, 0),    # Blue
-        (0, 0, 255),    # Red
-        (255, 255, 0),  # Cyan
-        (255, 0, 255),  # Magenta
-        (0, 255, 255),  # Yellow
-    ]
-    
+    # Draw Rooms
     for room in rooms:
-        pts = np.array(
-            [[p["x"], p["y"]] for p in room["polygon_px"]], dtype=np.int32
-        ).reshape(-1, 1, 2)
-        
-        color = colors[room["id"] % len(colors)]
-        cv2.polylines(overlay, [pts], True, color, 3)
-        
-        # Calculate centroid
+        pts = np.array([[p["x"], p["y"]] for p in room["polygon_px"]], dtype=np.int32).reshape(-1, 1, 2)
+        cv2.polylines(overlay, [pts], True, (0, 255, 0), 2)
         center = pts.reshape(-1, 2).mean(axis=0).astype(int)
-        
-        # Draw label with background
-        label = f"R{room['id']}: {room['area_m2']:.1f}m² ({room['num_corners']} sides)"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
-        thickness = 1
-        
-        (label_w, label_h), baseline = cv2.getTextSize(label, font, font_scale, thickness)
-        
-        # Draw background rectangle
-        cv2.rectangle(
-            overlay,
-            (center[0] - label_w // 2 - 5, center[1] - label_h - 5),
-            (center[0] + label_w // 2 + 5, center[1] + 5),
-            (255, 255, 255),
-            -1,
-        )
-        
-        # Draw text
-        cv2.putText(
-            overlay,
-            label,
-            (center[0] - label_w // 2, center[1]),
-            font,
-            font_scale,
-            (0, 0, 0),
-            thickness,
-        )
-    
-    # Add metadata
-    cv2.putText(
-        overlay,
-        f"Scale: {scale_m_per_px:.6f} m/px | Rooms: {len(rooms)}",
-        (10, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2,
-    )
-    cv2.putText(
-        overlay,
-        f"Scale: {scale_m_per_px:.6f} m/px | Rooms: {len(rooms)}",
-        (10, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (0, 0, 0),
-        1,
-    )
-    
+        cv2.putText(overlay, f"RM {room['id']}", tuple(center), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+    # Draw "Detected" Walls (overlaying the mask for visualization)
+    # We can use Hough lines to actually "detect" them as entities
+    lines = cv2.HoughLinesP(walls_mask, 1, np.pi/180, threshold=50, minLineLength=40, maxLineGap=10)
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            cv2.line(overlay, (x1, y1), (x2, y2), (0, 0, 255), 2) # Red for walls
+
     return {
         "rooms": rooms,
         "overlay_png_data_url": _encode_png_data_url(overlay),
-        "image_width_px": int(image_bgr.shape[1]),
-        "image_height_px": int(image_bgr.shape[0]),
         "total_rooms": len(rooms),
-        "debug_masks": {
-            "walls": _encode_png_data_url(cv2.cvtColor(walls, cv2.COLOR_GRAY2BGR)),
-            "rooms": _encode_png_data_url(cv2.cvtColor(rooms_mask, cv2.COLOR_GRAY2BGR)),
-        },
+        "elements": {
+            "walls": len(lines) if lines is not None else 0,
+            "doors": 0, # CV detection for doors/windows is hard without templates
+            "windows": 0
+        }
     }
